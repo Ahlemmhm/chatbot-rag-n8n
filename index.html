@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Zit Zitouna RAG Chatbot</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root {
+      --bg:#0f172a; --panel:#111827; --muted:#9ca3af; --text:#e5e7eb; --accent:#22c55e; --danger:#ef4444;
+    }
+    *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--text);font:16px/1.5 system-ui,Segoe UI,Roboto}
+    .wrap{max-width:860px;margin:32px auto;padding:0 16px}
+    .card{background:var(--panel);border:1px solid #1f2937;border-radius:14px;overflow:hidden}
+    header{display:flex;align-items:center;gap:12px;padding:16px 20px;border-bottom:1px solid #1f2937}
+    header h1{font-size:18px;margin:0}
+    header .dot{width:10px;height:10px;border-radius:50%;background:var(--accent)}
+    .controls{display:flex;gap:8px;flex-wrap:wrap;padding:12px 16px;border-bottom:1px solid #1f2937}
+    select,input[type=text]{background:#0b1220;border:1px solid #1f2937;color:var(--text);padding:10px 12px;border-radius:10px;outline:none}
+    .controls .grow{flex:1}
+    .chat{height:56vh;overflow:auto;padding:16px;display:flex;flex-direction:column;gap:12px}
+    .msg{max-width:75%;padding:10px 12px;border-radius:12px;border:1px solid #1f2937;white-space:pre-wrap}
+    .me{align-self:flex-end;background:#0b1220}
+    .bot{align-self:flex-start;background:#0b1a10;border-color:#15351f}
+    .muted{color:var(--muted);font-size:12px}
+    .input{display:flex;gap:10px;padding:12px;border-top:1px solid #1f2937;background:#0b1220}
+    textarea{flex:1;resize:none;min-height:44px;max-height:140px;background:#0b1220;border:1px solid #1f2937;border-radius:10px;color:var(--text);padding:10px 12px;outline:none}
+    button{background:var(--accent);border:none;color:#052e16;padding:10px 14px;border-radius:10px;font-weight:600;cursor:pointer}
+    button[disabled]{opacity:.6;cursor:not-allowed}
+    .err{color:var(--danger)}
+    footer{margin-top:10px;text-align:center;color:var(--muted);font-size:12px}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <header>
+        <span class="dot"></span>
+        <h1>Zit Zitouna RAG Chatbot</h1>
+        <span class="muted" id="status">ready</span>
+      </header>
+
+      <div class="controls">
+        <label>Language:
+          <select id="lang">
+            <option value="fr">Français</option>
+            <option value="ar">العربية</option>
+            <option value="de">Deutsch</option>
+            <option value="en">English</option>
+          </select>
+        </label>
+        <input id="session" class="grow" type="text" placeholder="Session ID (keeps memory)" />
+        <button id="newSess">New session</button>
+      </div>
+
+      <div id="chat" class="chat"></div>
+
+      <div class="input">
+        <textarea id="msg" placeholder="Écris ta question…"></textarea>
+        <button id="send">Send</button>
+      </div>
+    </div>
+
+    <footer>Using n8n webhook + your RAG pipeline.</footer>
+  </div>
+
+<script>
+  // 1) Use PRODUCTION webhook URL (activate the workflow first)
+  const WEBHOOK_URL = "http://localhost:5678/webhook/zit-chat"; // <-- change to your production path
+
+  const els = {
+    chat: document.getElementById('chat'),
+    msg: document.getElementById('msg'),
+    send: document.getElementById('send'),
+    lang: document.getElementById('lang'),
+    session: document.getElementById('session'),
+    newSess: document.getElementById('newSess'),
+    status: document.getElementById('status'),
+  };
+
+  // restore last session/lang
+  els.session.value = localStorage.getItem('sessionId') || ('sess-' + Math.random().toString(36).slice(2,8));
+  els.lang.value = localStorage.getItem('lang') || 'fr';
+
+  els.newSess.onclick = () => {
+    els.session.value = 'sess-' + Math.random().toString(36).slice(2,8);
+    localStorage.setItem('sessionId', els.session.value);
+    addBot('🆕 New session started: ' + els.session.value);
+  };
+
+  els.lang.onchange = () => localStorage.setItem('lang', els.lang.value);
+  els.session.onchange = () => localStorage.setItem('sessionId', els.session.value);
+
+  function addMsg(text, who='me'){
+    const wrap = document.createElement('div');
+    wrap.className = 'msg ' + (who === 'me' ? 'me':'bot');
+    wrap.textContent = text;
+    els.chat.appendChild(wrap);
+    els.chat.scrollTop = els.chat.scrollHeight;
+  }
+  function addBot(text){ addMsg(text,'bot'); }
+  function setBusy(b){
+    els.send.disabled = b;
+    els.status.textContent = b ? 'sending…' : 'ready';
+  }
+
+  async function send(){
+    const text = els.msg.value.trim();
+    if(!text) return;
+    addMsg(text,'me');
+    els.msg.value = '';
+    setBusy(true);
+
+    const payload = {
+      message: text,
+      lang: els.lang.value || 'fr',
+      sessionId: els.session.value || 'demo-1',
+    };
+
+    try{
+      const res = await fetch(WEBHOOK_URL, {
+        method:'POST',
+        headers:{
+          'Content-Type':'application/json',
+          // 2) send session id header so memory sticks
+          'X-Session-Id': els.session.value || 'demo-1'
+        },
+        body: JSON.stringify(payload),
+      });
+
+      if(!res.ok){
+        const t = await res.text().catch(()=> '');
+        throw new Error(`HTTP ${res.status} ${t || ''}`.trim());
+      }
+
+      // 3) expect JSON with { reply: "..." }
+      const data = await res.json();
+      const answer = data.reply || data.answer || data.text || data.response || data.message || JSON.stringify(data, null, 2);
+      addBot(answer);
+      if (data.sources) addBot('Sources:\n' + data.sources);
+    }catch(err){
+      addBot('❌ Error: ' + (err?.message || err));
+      console.error(err);
+    }finally{
+      setBusy(false);
+    }
+  }
+
+  els.send.onclick = send;
+  els.msg.addEventListener('keydown', (e) => {
+    if(e.key === 'Enter' && !e.shiftKey){
+      e.preventDefault();
+      send();
+    }
+  });
+
+  // greet
+  addBot('👋 Salut ! Pose-moi des questions sur la stratégie “Zayeti.pdf”.');
+</script>
+</body>
+</html>
